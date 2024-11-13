@@ -1,3 +1,5 @@
+# new table for correlation among ROSMAP * 2 and NYBB in RIN, PMI, PTT 
+
 # ------------------------------------------------------------------------------
 # Author: Jiahe Tian, based on Sophie Ross's script
 # Date: 7/11/2024
@@ -17,13 +19,15 @@ library(tidyverse)
 library(readxl)
 library(psych)
 library(openxlsx)
+library(sva)
+library(purrr)
 
 # ------------------------------------------------------------------------------
 # Data Loading
 # ------------------------------------------------------------------------------
 
 # please specify your working directory
-setwd("D:/Jiahe/Columbia")
+setwd("C:/Users/jt3586/drs/")
 
 #loading in the data
 BB_md1 <- read.csv("rna_quality_paper/data/p1-A_NYBB_Teich(in).csv")
@@ -81,13 +85,17 @@ BB_counts <- read.csv("rna_quality_paper/data/p1_raw_counts_geneID.csv", row.nam
 BB_pmi <- read.csv("rna_quality_paper/data/All_P-1_Demos_with_Rs.csv", check.names = F)
 
 NPH_md <- read.csv("rna_quality_paper/data/NPH_metadata.csv")
-NPH_medians <- read.csv("rna_quality_paper/data/median_nph_uncheck.csv")
+NPH_medians <- read.csv("rna_quality_paper/data/median_nph_picard_500_t1000.csv") # use this for 
+#NPH_medians <- read.csv("rna_quality_paper/data/median_nph_uncheck.csv") # use this for Picard
+
 NPH_medians <- NPH_medians |>
   rename(SampleID = SAMPLE)
 NPH_counts <- read.csv("rna_quality_paper/data/NPH_raw_counts.csv", row.names=1, check.names = F)
 
 ROSMAP_md <-  read.csv("rna_quality_paper/data/ROSMAP_metadata_full_899_final.csv")
-ROSMAP_medians <- read.csv("rna_quality_paper/data/median_rosmap_match.csv")
+ROSMAP_medians <- read.csv("rna_quality_paper/data/median_rosmap_picard_500_t1000.csv") # use this for 
+#ROSMAP_medians <- read.csv("rna_quality_paper/data/median_rosmap_match.csv") # use this for Picard
+
 ROSMAP_medians <- ROSMAP_medians |>
   rename(specimenID = SAMPLE)
 ROSMAP_counts <-  read.csv("rna_quality_paper/data/ROSMAP_DLPFC_final_raw_59653x899_projid_counts 1.csv", row.names=1, check.names = F)
@@ -115,46 +123,45 @@ NPH_counts <- NPH_counts[, colnames(NPH_counts)[match(NPH_md$SampleID, colnames(
 
 #ROSMAP
 ROSMAP_md$specimenID <- sub("^Sample_", "", ROSMAP_md$specimenID)
+# this extracts the sample id that belongs to ROSMAP oligodT (aka. batch 1)
 
-
-ROSMAP_tmp <- merge(ROSMAP_medians, ROSMAP_md, by = "specimenID")
+# Merge before splitting, ensuring all samples in ROSMAP_md are retained
+ROSMAP_tmp <- merge(ROSMAP_medians, ROSMAP_md, by = "specimenID", all.y = TRUE)
 ROSMAP_md <- ROSMAP_tmp
 
-ROSMAP_counts <- ROSMAP_counts[, colnames(ROSMAP_counts)[match(ROSMAP_md$projid, colnames(ROSMAP_counts))]]
-
-# this extracts the sample id that belongs to ROSMAP oligodT (aka. batch 1)
+# Then split the merged data
 samples_keep <- readLines("rna_quality_paper/data/batch1_samples.txt")
-
 ROSMAP_md_1 <- ROSMAP_md[ROSMAP_md$specimenID %in% samples_keep, ]
 ROSMAP_md_other <- ROSMAP_md[!(ROSMAP_md$specimenID %in% samples_keep), ]
-ROSMAP_md <- ROSMAP_md_1
+
+
 
 ###############################################################################
 
 #getting the fraction of counts from the top 10 genes over the total expression
 top_10_ratio <- function(gene_counts){
-# making a vector to hold the top 10 gene ratios
-top_10_ratios <- numeric(ncol(gene_counts))
-
-for (i in 1:ncol(gene_counts)) {
-  # Get the top 10 genes for each sample
-  top_10_genes <- head(sort(gene_counts[, i], decreasing = TRUE), 10)
+  # making a vector to hold the top 10 gene ratios
+  top_10_ratios <- numeric(ncol(gene_counts))
   
-  # Sum the counts of the top 10 genes
-  top_10_sum <- sum(top_10_genes)
+  for (i in 1:ncol(gene_counts)) {
+    # Get the top 10 genes for each sample
+    top_10_genes <- head(sort(gene_counts[, i], decreasing = TRUE), 10)
+    
+    # Sum the counts of the top 10 genes
+    top_10_sum <- sum(top_10_genes)
+    
+    # Calculate the total gene expression for the sample
+    total_expression <- sum(gene_counts[, i])
+    
+    # Calculate the ratio of the top 10 genes to total gene expression
+    top_10_ratio <- top_10_sum / total_expression
+    
+    # Store the ratio in the vector
+    top_10_ratios[i] <- top_10_ratio
+  }
   
-  # Calculate the total gene expression for the sample
-  total_expression <- sum(gene_counts[, i])
-  
-  # Calculate the ratio of the top 10 genes to total gene expression
-  top_10_ratio <- top_10_sum / total_expression
-  
-  # Store the ratio in the vector
-  top_10_ratios[i] <- top_10_ratio
-}
-
-# Print or use the results as needed
-return(top_10_ratios)
+  # Print or use the results as needed
+  return(top_10_ratios)
 }
 
 BB_top_10 <- top_10_ratio(BB_counts)
@@ -169,7 +176,7 @@ NPH_top_10 <- top_10_ratio(NPH_counts)
 # filter_counts_ROSMAP:
 # Filter ROSMAP_counts to keep columns where colnames are in ROSMAP_md$projid
 # oligo dT
-ROSMAP_counts_filtered <- ROSMAP_counts[, colnames(ROSMAP_counts) %in% ROSMAP_md$projid]
+ROSMAP_counts_filtered <- ROSMAP_counts[, colnames(ROSMAP_counts) %in% ROSMAP_md_1$projid]
 ROSMAP_top_10 <- top_10_ratio(ROSMAP_counts_filtered)
 
 ROSMAP_counts_other <- ROSMAP_counts[, colnames(ROSMAP_counts) %in% ROSMAP_md_other$projid]
@@ -184,8 +191,10 @@ ROSMAP_top_10_2 <- top_10_ratio(ROSMAP_counts_other)
 BB_pmi <- BB_pmi |>
   mutate(PMIRTFzn = str_split(PMIRTFzn, ":")) |>
   mutate(PMIRTFzn = map_dbl(PMIRTFzn, ~ {
-    as.numeric(.x[1]) * 60 + as.numeric(.x[2])
-    
+    hours <- as.numeric(.x[1])
+    minutes <- as.numeric(.x[2])
+    seconds <- ifelse(length(.x) >= 3, as.numeric(.x[3]), 0)
+    hours + (minutes / 60) + (seconds / 3600)
   }))
 
 # generate data frames ready for the correlation analysis
@@ -194,29 +203,37 @@ BB_relevant <- data.frame(RIN = BB_md$BA.FQN, PMI = BB_pmi$PMIRTFzn,
 
 NPH_relevant <- data.frame(RIN = NPH_md$RIN, PTT = NPH_top_10,
                            median_5_bias = NPH_md$MEDIAN_5PRIME_BIAS, median_3_bias = NPH_md$MEDIAN_3PRIME_BIAS, 
-                           median_5_3_bias = NPH_md$MEDIAN_5PRIME_TO_3PRIME_BIAS)
+                           median_5_3_bias = NPH_md$MEDIAN_5PRIME_TO_3PRIME_BIAS, Batch = NPH_md$Batch)
 
 
-ROSMAP_oligo_relevant <- data.frame(RIN = ROSMAP_md$RIN, PMI = ROSMAP_md$pmi, PTT = ROSMAP_top_10,
-                          median_5_bias = ROSMAP_md$MEDIAN_5PRIME_BIAS, 
-                          median_3_bias = ROSMAP_md$MEDIAN_3PRIME_BIAS, median_5_3_bias = ROSMAP_md$MEDIAN_5PRIME_TO_3PRIME_BIAS)
+ROSMAP_oligo_relevant <- data.frame(RIN = ROSMAP_md_1$RIN, PMI = ROSMAP_md_1$pmi, PTT = ROSMAP_top_10,
+                                    median_5_bias = ROSMAP_md_1$MEDIAN_5PRIME_BIAS, 
+                                    median_3_bias = ROSMAP_md_1$MEDIAN_3PRIME_BIAS, median_5_3_bias = ROSMAP_md_1$MEDIAN_5PRIME_TO_3PRIME_BIAS
+                                    , Batch = ROSMAP_md_1$sequencing_batch)
 
 ROSMAP_riboDep_relevant <- data.frame(RIN = ROSMAP_md_other$RIN, PMI = ROSMAP_md_other$pmi, PTT = ROSMAP_top_10_2)
 
+autopsy_relevant <- rbind(
+  BB_relevant[, c("RIN", "PMI", "PTT")],
+  ROSMAP_oligo_relevant[, c("RIN", "PMI", "PTT")],
+  ROSMAP_riboDep_relevant[, c("RIN", "PMI", "PTT")]
+)
 
 # ------------------------------------------------------------------------------
 # Generate Correlation Matrices
 # ------------------------------------------------------------------------------
 
+
 # Calculate the minimum RIN values from the NPH_relevant dataset
 min_rin <- min(NPH_relevant$RIN, na.rm = TRUE)
-
+print(min_rin)
 # Filter the ROSMAP_relevant dataset to include only rows with RIN within the range [min_rin, inf]
 
 filtered_BB_relevant <- BB_relevant[BB_relevant$RIN >= min_rin, ]
 filtered_ROSMAP_oligo_relevant <- ROSMAP_oligo_relevant[ROSMAP_oligo_relevant$RIN >= min_rin, ]
 filtered_ROSMAP_riboDep_relevant <- ROSMAP_riboDep_relevant[ROSMAP_riboDep_relevant$RIN >= min_rin, ]
 
+filtered_autopsy_relevant <- autopsy_relevant[autopsy_relevant$RIN >= min_rin,]
 # Replace any non-numeric values in PMI with NA
 
 filtered_BB_relevant$PMI <- as.numeric(as.character(filtered_BB_relevant$PMI))
@@ -227,6 +244,9 @@ filtered_ROSMAP_oligo_relevant$PMI[is.nan(filtered_ROSMAP_oligo_relevant$PMI)] <
 
 filtered_ROSMAP_riboDep_relevant$PMI <- as.numeric(as.character(filtered_ROSMAP_riboDep_relevant$PMI))
 filtered_ROSMAP_riboDep_relevant$PMI[is.nan(filtered_ROSMAP_riboDep_relevant$PMI)] <- NA
+
+filtered_autopsy_relevant$PMI <- as.numeric(as.character(filtered_autopsy_relevant$PMI))
+filtered_autopsy_relevant$PMI[is.nan(filtered_autopsy_relevant$PMI)] <- NA
 
 generate_correlation_tables <- function(data, name) {
   # Select all numeric columns for correlation
@@ -267,6 +287,8 @@ sheet_list[[4]] <- generate_correlation_tables(ROSMAP_oligo_relevant, "ROSMAP_ol
 sheet_list[[5]] <- generate_correlation_tables(filtered_ROSMAP_oligo_relevant, "ROSMAP_oligo_after_filter")
 sheet_list[[6]] <- generate_correlation_tables(ROSMAP_riboDep_relevant, "ROSMAP_riboDep")
 sheet_list[[7]] <- generate_correlation_tables(filtered_ROSMAP_riboDep_relevant, "ROSMAP_riboDep_after_filter")
+sheet_list[[8]] <- generate_correlation_tables(autopsy_relevant, "autopsy_combined")
+sheet_list[[9]] <- generate_correlation_tables(filtered_autopsy_relevant, "autopsy_combined_after_filter")
 
 # a new Excel workbook
 wb <- createWorkbook()
@@ -275,7 +297,7 @@ for (sheet in sheet_list) {
   writeData(wb, sheet$name, sheet$data, rowNames = TRUE)
 }
 
-saveWorkbook(wb, "rna_quality_paper/correlation_matrices (table 1&2)/Correlations.xlsx", overwrite = TRUE)
+saveWorkbook(wb, "rna_quality_paper/correlation_matrices (table 1&2)/Correlations_median_500_t1000.xlsx", overwrite = TRUE)
 
 # save the varibles created for individual gene correlation analysis
 save.image(file = "rna_quality_paper/correlation_on_each_gene (supp 1&2)/processed_data.RData")
